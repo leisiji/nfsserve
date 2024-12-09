@@ -58,8 +58,13 @@ pub fn metadata_to_fattr3(fid: fileid3, meta: &Metadata) -> fattr3 {
     let accessed = meta.accessed().unwrap().elapsed().unwrap();
     let modified = meta.modified().unwrap().elapsed().unwrap();
     let created = meta.created().unwrap().elapsed().unwrap();
+    let ftype = if meta.is_dir() {
+        ftype3::NF3DIR
+    } else {
+        ftype3::NF3REG
+    };
     fattr3 {
-        ftype: ftype3::NF3REG,
+        ftype: ftype,
         mode: file_mode,
         nlink: 1,
         uid: 0,
@@ -741,7 +746,7 @@ const HOSTPORT: u32 = 11111;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
         .with_writer(std::io::stderr)
         .init();
 
@@ -751,7 +756,7 @@ async fn main() {
     let path = PathBuf::from(path);
 
     let fs = MirrorFS::new(path);
-    let listener = NFSTcpListener::bind(&format!("127.0.0.1:{HOSTPORT}"), fs)
+    let listener = NFSTcpListener::bind(&format!("0.0.0.0:{HOSTPORT}"), fs)
         .await
         .unwrap();
     listener.handle_forever().await.unwrap();
