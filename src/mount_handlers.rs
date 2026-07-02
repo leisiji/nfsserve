@@ -84,6 +84,8 @@ pub async fn mountproc3_mnt(
     let mut path = dirpath::new();
     path.deserialize(input)?;
     let utf8path = std::str::from_utf8(&path).unwrap_or_default();
+    // Some NFS clients send an empty path for the root mount point
+    let utf8path = if utf8path.is_empty() { "/" } else { utf8path };
     debug!("mountproc3_mnt({:?},{:?}) ", xid, utf8path);
     let path = if let Some(path) = utf8path.strip_prefix(context.export_name.as_str()) {
         let path = path.trim_start_matches('/').trim_end_matches('/').trim().as_bytes();
@@ -186,6 +188,8 @@ pub async fn mountproc3_umnt(
     if let Some(ref chan) = context.mount_signal {
         let _ = chan.send(false).await;
     }
+    // Clear transaction tracker so a re-mount with same xid isn't treated as retransmission
+    context.transaction_tracker.clear_client(&context.client_addr);
     make_success_reply(xid).serialize(output)?;
     mountstat3::MNT3_OK.serialize(output)?;
     Ok(())
@@ -201,6 +205,7 @@ pub async fn mountproc3_umnt_all(
     if let Some(ref chan) = context.mount_signal {
         let _ = chan.send(false).await;
     }
+    context.transaction_tracker.clear_client(&context.client_addr);
     make_success_reply(xid).serialize(output)?;
     mountstat3::MNT3_OK.serialize(output)?;
     Ok(())

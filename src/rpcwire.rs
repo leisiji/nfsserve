@@ -17,7 +17,7 @@ const NFS_ACL_PROGRAM: u32 = 100227;
 const NFS_ID_MAP_PROGRAM: u32 = 100270;
 const NFS_METADATA_PROGRAM: u32 = 200024;
 
-async fn handle_rpc(
+pub async fn handle_rpc(
     input: &mut impl Read,
     output: &mut impl Write,
     mut context: RPCContext,

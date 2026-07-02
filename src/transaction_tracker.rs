@@ -41,6 +41,13 @@ impl TransactionTracker {
             *tx = TransactionState::Completed(completion_time);
         }
     }
+
+    /// Clears all transactions for a given client.
+    /// Useful on unmount so a fresh mount doesn't trigger false retransmission detection.
+    pub fn clear_client(&self, client_addr: &str) {
+        let mut transactions = self.transactions.lock().expect("unable to unlock transactions mutex");
+        transactions.retain(|(_, addr), _| addr != client_addr);
+    }
 }
 
 fn housekeeping(transactions: &mut HashMap<(u32, String), TransactionState>, max_age: Duration) {

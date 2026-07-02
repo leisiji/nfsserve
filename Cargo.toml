@@ -45,3 +45,8 @@ path = "examples/demo.rs"
 name = "mirrorfs"
 required-features = ["demo"]
 path = "examples/mirrorfs.rs"
+
+[[example]]
+name = "mirrorfs-windows"
+required-features = ["demo"]
+path = "examples/mirrorfs-windows.rs"
