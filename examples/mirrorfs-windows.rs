@@ -629,7 +629,9 @@ async fn main() {
 
     let fs = MirrorFS::new(path);
     let listener = NFSUdpListener::bind(&format!("0.0.0.0:{HOSTPORT}"), fs).await.unwrap();
+    // Spawn rpcbind/portmap on port 111, GETPORT returns HOSTPORT
+    listener.spawn_rpcbind("0.0.0.0:111").unwrap();
     listener.handle_forever().await.unwrap();
 }
 // Test with
-// mount -t nfs -o nolocks,vers=3,udp,port=2049,mountport=2049,soft 127.0.0.1:/ mnt/
+// mount -t nfs -o nolocks,vers=3,udp,port=2049,mountport=111,soft 127.0.0.1:/ mnt/

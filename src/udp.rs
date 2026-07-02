@@ -9,9 +9,11 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::context::RPCContext;
+use crate::rpc::{make_success_reply, proc_unavail_reply_message, prog_mismatch_reply_message, rpc_body, rpc_msg};
 use crate::rpcwire::handle_rpc;
 use crate::transaction_tracker::TransactionTracker;
 use crate::vfs::NFSFileSystem;
+use crate::xdr::XDR;
 
 /// A NFS UDP Listener
 ///
@@ -83,6 +85,98 @@ impl<T: NFSFileSystem + Send + Sync + 'static> NFSUdpListener<T> {
     /// Default path is `/` if not set.
     pub fn with_export_name<S: AsRef<str>>(&mut self, export_name: S) {
         self.export_name = Arc::new(format!("/{}", export_name.as_ref().trim_end_matches('/').trim_start_matches('/')))
+    }
+
+    /// Spawns a separate rpcbind/portmap UDP listener on `bind_addr` (e.g. "0.0.0.0:111").
+    ///
+    /// Only portmap requests (program 100000) are handled. GETPORT always returns
+    /// the main NFS port. Other RPC programs receive PROG_UNAVAIL.
+    pub fn spawn_rpcbind(&self, bind_addr: &str) -> io::Result<()> {
+        let bind_addr = bind_addr.to_string();
+        let nfs_port = self.port;
+        let tracker = self.transaction_tracker.clone();
+
+        std::thread::Builder::new().name("rpcbind".into()).spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+
+            rt.block_on(async move {
+                let socket = match UdpSocket::bind(&bind_addr).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("rpcbind: failed to bind {}: {:?}", bind_addr, e);
+                        return;
+                    },
+                };
+                info!("RPCBIND listening on UDP {}", bind_addr);
+
+                const PORTMAP_PROGRAM: u32 = 100000;
+                const PORTMAP_VERSION: u32 = 2;
+
+                let mut buf = vec![0u8; 65536];
+                loop {
+                    let (n, client_addr) = match socket.recv_from(&mut buf).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            error!("rpcbind recv error: {:?}", e);
+                            continue;
+                        },
+                    };
+
+                    let mut msg = rpc_msg::default();
+                    if msg.deserialize(&mut std::io::Cursor::new(&buf[..n])).is_err() {
+                        continue;
+                    }
+                    let xid = msg.xid;
+                    let client_str = client_addr.to_string();
+
+                    let call = match msg.body {
+                        rpc_body::CALL(c) => c,
+                        _ => continue,
+                    };
+
+                    // Only serve portmap
+                    if call.prog != PORTMAP_PROGRAM {
+                        debug!("rpcbind: ignoring program {}", call.prog);
+                        let mut reply = Vec::new();
+                        let _ = proc_unavail_reply_message(xid).serialize(&mut reply);
+                        let _ = socket.send_to(&reply, client_addr).await;
+                        continue;
+                    }
+                    if call.vers != PORTMAP_VERSION {
+                        debug!("rpcbind: wrong version {}", call.vers);
+                        let mut reply = Vec::new();
+                        let _ = prog_mismatch_reply_message(xid, PORTMAP_VERSION).serialize(&mut reply);
+                        let _ = socket.send_to(&reply, client_addr).await;
+                        continue;
+                    }
+                    if tracker.is_retransmission(xid, &client_str) {
+                        debug!("rpcbind: retransmission from {} — no reply", client_str);
+                        continue;
+                    }
+
+                    let mut reply = Vec::new();
+                    match call.proc {
+                        0 => {
+                            // PMAPPROC_NULL
+                            let _ = make_success_reply(xid).serialize(&mut reply);
+                        },
+                        3 => {
+                            // PMAPPROC_GETPORT — always return NFS port
+                            debug!("rpcbind: GETPORT xid={} -> port={}", xid, nfs_port);
+                            let _ = make_success_reply(xid).serialize(&mut reply);
+                            let _ = (nfs_port as u32).serialize(&mut reply);
+                        },
+                        _ => {
+                            let _ = proc_unavail_reply_message(xid).serialize(&mut reply);
+                        },
+                    }
+                    let _ = socket.send_to(&reply, client_addr).await;
+                    tracker.mark_processed(xid, &client_str);
+                }
+            });
+        })?;
+
+        Ok(())
     }
 }
 
